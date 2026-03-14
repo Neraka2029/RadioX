@@ -1,0 +1,97 @@
+version: "3.9"
+
+services:
+  # ─── PostgreSQL Database ───────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: radiox_postgres
+    environment:
+      POSTGRES_DB: radiox_db
+      POSTGRES_USER: radiox
+      POSTGRES_PASSWORD: radiox_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U radiox -d radiox_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - radiox_network
+
+  # ─── Backend FastAPI ──────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: radiox_backend
+    environment:
+      DATABASE_URL: postgresql://radiox:radiox_password@postgres:5432/radiox_db
+      ML_SERVICE_URL: http://ml_service:8001
+      SECRET_KEY: ${SECRET_KEY:-radiox-change-me-in-production}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - uploads_data:/app/uploads
+      - heatmaps_data:/app/heatmaps
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - radiox_network
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ─── ML Service ──────────────────────────────────────────────────────
+  ml_service:
+    build:
+      context: ./ml_service
+      dockerfile: Dockerfile
+    container_name: radiox_ml
+    environment:
+      MODEL_PATH: /app/models/chestxray_densenet121.pth
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./ml_service:/app
+      - ml_models:/app/models
+    networks:
+      - radiox_network
+    restart: unless-stopped
+    # GPU support (uncomment if NVIDIA GPU available)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    command: uvicorn main:app --host 0.0.0.0 --port 8001
+
+  # ─── Frontend React ──────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: radiox_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - radiox_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  uploads_data:
+  heatmaps_data:
+  ml_models:
+
+networks:
+  radiox_network:
+    driver: bridge

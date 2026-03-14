@@ -1,0 +1,106 @@
+@import '../styles/globals.css';
+
+.stats-bar {
+  display: flex;
+  gap: 12px;
+  animation: fadeIn 0.4s ease both;
+  flex-wrap: wrap;
+}
+
+.stat-card {
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-lg);
+  animation: slideUp 0.4s ease both;
+  transition: border-color var(--transition-fast);
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+}
+
+.stat-cyan::before { background: var(--accent-cyan); }
+.stat-blue::before { background: var(--accent-blue); }
+.stat-orange::before { background: var(--severity-moderate); }
+.stat-green::before { background: var(--severity-normal); }
+
+.stat-card:hover { border-color: var(--border-medium); }
+
+.stat-icon { font-size: 20px; }
+
+.stat-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stat-card.loading .stat-value {
+  color: var(--text-muted);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.stat-card.loading .stat-icon {
+  opacity: 0.5;
+}
+
+.stat-value {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.stat-unit {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Time card */
+.stat-time {
+  flex: 0;
+  min-width: 100px;
+  justify-content: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.time-display {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--accent-cyan);
+  letter-spacing: 1px;
+}
+
+.date-display {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-transform: capitalize;
+}

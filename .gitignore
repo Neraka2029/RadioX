@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Modèles IA (trop lourds pour GitHub)
+ml_service/models/*.pt
+ml_service/models/*.pth
+ml_service/models/*.bin
+
+# Base de données
+*.db
+*.sqlite
+*.sqlite3
+
+# Variables d'environnement
+.env
+.env.local
+.env.production
+backend/.env
+
+# Node.js
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Dataset (trop lourd)
+datasets/
+*.csv.gz
+
+# Cache torchxrayvision
+.torchxrayvision/

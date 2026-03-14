@@ -1,0 +1,57 @@
+{
+  "Atelectasis": {
+    "auc": 0.8028100775193798,
+    "n_pos": 16,
+    "n_total": 145
+  },
+  "Consolidation": {
+    "auc": 0.8599290780141844,
+    "n_pos": 4,
+    "n_total": 145
+  },
+  "Infiltration": {
+    "auc": 0.7806183115338883,
+    "n_pos": 29,
+    "n_total": 145
+  },
+  "Pneumothorax": {
+    "auc": 0.8192488262910798,
+    "n_pos": 3,
+    "n_total": 145
+  },
+  "Edema": {
+    "auc": 0.9292565947242206,
+    "n_pos": 6,
+    "n_total": 145
+  },
+  "Effusion": {
+    "auc": 0.8945221445221445,
+    "n_pos": 13,
+    "n_total": 145
+  },
+  "Pneumonia": {
+    "auc": 0.6538461538461539,
+    "n_pos": 2,
+    "n_total": 145
+  },
+  "Pleural_Thickening": {
+    "auc": 0.6930455635491607,
+    "n_pos": 6,
+    "n_total": 145
+  },
+  "Cardiomegaly": {
+    "auc": 0.9585921325051759,
+    "n_pos": 7,
+    "n_total": 145
+  },
+  "Nodule": {
+    "auc": 0.6097308488612836,
+    "n_pos": 7,
+    "n_total": 145
+  },
+  "Mass": {
+    "auc": 0.6171428571428572,
+    "n_pos": 5,
+    "n_total": 145
+  }
+}

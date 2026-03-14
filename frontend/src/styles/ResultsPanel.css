@@ -1,0 +1,17 @@
+
+/* 14 pathologies additions */
+.verdict-banner { display:flex; align-items:center; gap:16px; padding:16px 20px; border-radius:12px; margin-bottom:20px; }
+.verdict-normal { background: linear-gradient(135deg, #00ffc822, #00ffc811); border:1px solid #00ffc844; }
+.verdict-pathology { background: linear-gradient(135deg, #ff446622, #ff446611); border:1px solid #ff446644; }
+.verdict-icon { font-size:2rem; }
+.verdict-text h2 { color:#e8f4ff; margin:0 0 4px; font-size:1.1rem; }
+.verdict-text p { color:#6b7fa3; margin:0; font-size:0.85rem; }
+.prob-divider { text-align:center; color:#6b7fa3; font-size:0.75rem; margin:8px 0; }
+.prob-description { color:#6b7fa3; font-size:0.75rem; margin:4px 0 0 28px; font-style:italic; }
+.show-more-btn { width:100%; padding:8px; background:#162040; border:1px solid #1e3060; color:#00d4ff; border-radius:8px; cursor:pointer; margin-top:8px; font-size:0.85rem; }
+.show-more-btn:hover { background:#1e3060; }
+.prob-badge { font-size:0.7rem; padding:2px 6px; border-radius:4px; margin-left:auto; }
+.prob-badge[data-severity="high"] { background:#ff446622; color:#ff4466; }
+.prob-badge[data-severity="moderate"] { background:#ffaa0022; color:#ffaa00; }
+.prob-badge[data-severity="low"] { background:#4488ff22; color:#4488ff; }
+.meta-info { display:flex; justify-content:space-between; color:#6b7fa3; font-size:0.75rem; margin-top:8px; }
