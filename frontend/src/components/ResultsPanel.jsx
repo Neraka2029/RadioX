@@ -190,9 +190,9 @@ export default function ResultsPanel({ results, isAnalyzing, uploadedImage }) {
     );
   }
 
-  const primaryPrediction = results?.predictions?.reduce((a, b) =>
-    a.probability > b.probability ? a : b
-  );
+  const primaryPrediction = results?.predictions?.length > 0 
+    ? results.predictions.reduce((a, b) => a.probability > b.probability ? a : b)
+    : null;
   const primarySeverity = SEVERITY_LABELS[primaryPrediction?.severity] || SEVERITY_LABELS.low;
 
   return (

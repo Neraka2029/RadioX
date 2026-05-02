@@ -12,15 +12,11 @@ export default function ReportsPanel() {
     const fetchReports = async () => {
       try {
         const response = await fetch("http://localhost:8001/reports");
-        if (response.ok) {
-          const data = await response.json();
-          setReports(data.reports || []);
-        } else {
-          throw new Error("Failed to fetch reports");
-        }
+        const data = await response.json();
+        setReports(data.reports || []);
       } catch (error) {
-        console.warn("Impossible de charger les rapports, utilisation des valeurs par défaut");
-        // Données de fallback
+        console.error("Failed to fetch reports:", error);
+        // Fallback vers données de démonstration
         setReports([
           {
             id: "RPT-DEMO-001",
@@ -69,14 +65,29 @@ export default function ReportsPanel() {
       
       if (!finalImageData && report.analysis_id) {
         try {
+          console.log("=== PDF IMAGE DEBUG ===");
+          console.log("Analysis ID:", report.analysis_id);
+          
+          // Récupérer l'image et la Grad-CAM depuis les données d'analyse originales
           const response = await fetch(`http://localhost:8001/analysis/${report.analysis_id}/image`);
+          console.log("Image response status:", response.status);
+          console.log("Image response ok:", response.ok);
+          
           if (response.ok) {
             const imageDataResult = await response.json();
+            console.log("Image data result:", imageDataResult);
             if (imageDataResult.success) {
-              // Convertir base64 en data URL
-              finalImageData = `data:image/jpeg;base64,${imageDataResult.image_base64}`;
-              console.log('Image récupérée depuis le backend pour le PDF');
+              // Créer un objet avec l'image et la Grad-CAM
+              finalImageData = {
+                image_base64: imageDataResult.image_base64,
+                heatmap_base64: imageDataResult.heatmap_base64 || null  // ← RÉCUPÉRER DU BACKEND
+              };
+              console.log("Final image data with heatmap:", finalImageData);
+            } else {
+              console.log("Image data failed:", imageDataResult);
             }
+          } else {
+            console.log("Image fetch failed with status:", response.status);
           }
         } catch (error) {
           console.warn('Impossible de récupérer l\'image depuis le backend:', error);
@@ -108,67 +119,6 @@ export default function ReportsPanel() {
     } finally {
       setExporting(false);
     }
-  };
-
-  const handlePrintReport = (report) => {
-    // Créer une fenêtre d'impression avec le contenu du rapport
-    const printWindow = window.open('', '_blank');
-    
-    if (printWindow) {
-      const htmlContent = generatePrintHTML(report);
-      printWindow.document.write(htmlContent);
-      printWindow.document.close();
-      
-      // Attendre que le contenu soit chargé puis imprimer
-      printWindow.onload = () => {
-        printWindow.print();
-        printWindow.close();
-      };
-    }
-  };
-
-  const generatePrintHTML = (report) => {
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Rapport RadioX - ${report.patient}</title>
-        <style>
-          body { font-family: Arial, sans-serif; margin: 20px; }
-          .header { text-align: center; border-bottom: 2px solid #00d4ff; padding-bottom: 10px; }
-          .patient-info { margin: 20px 0; }
-          .findings { margin: 20px 0; }
-          .confidence { font-weight: bold; color: #00d4ff; }
-          @media print { body { margin: 10px; } }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h1>RADIOX - Rapport d'Analyse Radiographique</h1>
-          <p>Modèle IA: DenseNet-121 NIH ChestX-ray14</p>
-          <p>Date: ${report.date}</p>
-        </div>
-        
-        <div class="patient-info">
-          <h2>Informations du Patient</h2>
-          <p><strong>ID Patient:</strong> ${report.patient}</p>
-          <p><strong>ID Analyse:</strong> ${report.analysis_id}</p>
-          <p><strong>Confiance:</strong> <span class="confidence">${report.confidence}%</span></p>
-        </div>
-        
-        <div class="findings">
-          <h2>Détections Principales</h2>
-          <ul>
-            ${report.findings ? report.findings.map(f => `<li>${f}</li>`).join('') : '<li>Aucune pathologie détectée</li>'}
-          </ul>
-        </div>
-        
-        <div style="margin-top: 30px; font-style: italic; color: #666;">
-          <p>Ce rapport a été généré par RadioX - Les résultats doivent être confirmés par un professionnel de santé qualifié.</p>
-        </div>
-      </body>
-      </html>
-    `;
   };
 
   if (loading) {
@@ -221,9 +171,21 @@ export default function ReportsPanel() {
             <div className="report-findings">
               <h4>Détections principales :</h4>
               <ul>
-                {report.findings.map((finding, index) => (
-                  <li key={index}>{finding}</li>
-                ))}
+                {report.findings_detail && report.findings_detail.length > 0 ? (
+                  report.findings_detail.map((finding, index) => (
+                    <li key={index}>
+                      {finding.pathology} ({Math.round((finding.probability || 0) * 100)}%)
+                    </li>
+                  ))
+                ) : (
+                  report.findings && report.findings.length > 0 ? (
+                    report.findings.map((finding, index) => (
+                      <li key={index}>{finding}</li>
+                    ))
+                  ) : (
+                    <li>Aucune pathologie détectée</li>
+                  )
+                )}
               </ul>
             </div>
 
@@ -240,12 +202,6 @@ export default function ReportsPanel() {
                 disabled={exporting}
               >
                 {exporting ? 'Export...' : 'Exporter PDF'}
-              </button>
-              <button 
-                className="action-btn secondary" 
-                onClick={() => handlePrintReport(report)}
-              >
-                Imprimer
               </button>
             </div>
           </div>
@@ -291,29 +247,40 @@ export default function ReportsPanel() {
               
               <div className="findings-section">
                 <h4>Détections IA</h4>
-                {selectedReport.findings.map((finding, index) => (
-                  <div key={index} className="finding-item">
-                    <span className="finding-bullet">•</span>
-                    {finding}
-                  </div>
-                ))}
+                {selectedReport.findings_detail && selectedReport.findings_detail.length > 0 ? (
+                  selectedReport.findings_detail.map((finding, index) => (
+                    <div key={index} className="finding-item">
+                      <span className="finding-bullet">•</span>
+                      <span className="finding-text">
+                        {finding.pathology} ({Math.round((finding.probability || 0) * 100)}%)
+                      </span>
+                      <span className={`finding-severity ${finding.severity}`}>
+                        {finding.severity === 'high' ? 'Élevé' : 
+                         finding.severity === 'moderate' ? 'Modéré' : 'Faible'}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  selectedReport.findings.map((finding, index) => (
+                    <div key={index} className="finding-item">
+                      <span className="finding-bullet">•</span>
+                      {finding}
+                    </div>
+                  ))
+                )}
               </div>
 
-              <div className="report-actions-modal">
-                <button 
-                  className="action-btn primary" 
-                  onClick={() => handleExportPDF(selectedReport)}
-                  disabled={exporting}
-                >
-                  {exporting ? 'Export...' : 'Télécharger PDF'}
-                </button>
-                <button 
-                  className="action-btn secondary" 
-                  onClick={() => handlePrintReport(selectedReport)}
-                >
-                  Imprimer
-                </button>
-                <button className="action-btn secondary">Partager</button>
+              <div className="modal-actions">
+                <div className="actions-container">
+                  <button 
+                    className="action-btn primary" 
+                    disabled={exporting}
+                    onClick={() => handleExportPDF(selectedReport)}
+                  >
+                    {exporting ? 'Export...' : 'Télécharger PDF'}
+                  </button>
+                  <button className="action-btn secondary">Partager</button>
+                </div>
               </div>
             </div>
           </div>

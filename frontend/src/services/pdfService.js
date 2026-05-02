@@ -43,10 +43,25 @@ export class PDFReportService {
   }
 
   async addHeader(yPosition) {
-    // Titre principal
-    this.doc.setFontSize(24);
+    // Titre RADIOX centré
+    this.doc.setFontSize(28);
     this.doc.setFont('helvetica', 'bold');
-    this.doc.text('RADIOX - Rapport d\'Analyse Radiographique', this.margin, yPosition);
+    this.doc.setTextColor(0, 212, 255);
+    const radioXText = 'RADIOX';
+    const radioXWidth = this.doc.getTextWidth(radioXText);
+    const radioXX = (this.pageWidth - radioXWidth) / 2;
+    this.doc.text(radioXText, radioXX, yPosition);
+    
+    yPosition += 12;
+    
+    // Sous-titre Rapport d'Analyse Radiographique centré
+    this.doc.setFontSize(18);
+    this.doc.setFont('helvetica', 'normal');
+    this.doc.setTextColor(50);
+    const subtitleText = 'Rapport d\'Analyse Radiographique';
+    const subtitleWidth = this.doc.getTextWidth(subtitleText);
+    const subtitleX = (this.pageWidth - subtitleWidth) / 2;
+    this.doc.text(subtitleText, subtitleX, yPosition);
     
     yPosition += 15;
     
@@ -99,24 +114,106 @@ export class PDFReportService {
     
     this.doc.setFontSize(12);
     this.doc.setFont('helvetica', 'bold');
-    this.doc.text('Image Radiographique', this.margin, yPosition);
+    this.doc.text('Images Radiographiques', this.margin, yPosition);
     
     yPosition += 8;
     
     try {
-      // Ajouter l'image avec une taille appropriée
-      const imgWidth = 80; // mm
-      const imgHeight = 80; // mm (carré pour la radiographie)
-      const xPosition = (this.pageWidth - imgWidth) / 2; // Centrer l'image
+      // Image originale à gauche
+      const imgWidth = 70; // mm (plus petit pour deux images)
+      const imgHeight = 70; // mm (plus petit pour deux images)
+      const imgLeftX = this.margin + 10; // Marge gauche
       
-      this.doc.addImage(imageData, 'JPEG', xPosition, yPosition, imgWidth, imgHeight);
-      yPosition += imgHeight + 10;
+      // Utiliser image_base64 si disponible
+      const imageSource = imageData.image_base64 || imageData;
+      this.doc.addImage(imageSource, 'JPEG', imgLeftX, yPosition, imgWidth, imgHeight);
+      
+      // Image avec Grad-CAM superposée à droite
+      if (imageData.heatmap_base64) {
+        const imgRightX = this.margin + 90; // Position droite
+        
+        // Créer l'image composite dans le frontend
+        const compositeImage = await this.createCompositeImage(imageSource, imageData.heatmap_base64);
+        
+        // Légende pour l'image originale
+        this.doc.setFontSize(9);
+        this.doc.setFont('helvetica', 'normal');
+        this.doc.text('Image originale', imgLeftX + 5, yPosition + imgHeight + 5);
+        
+        // Légende pour l'image avec Grad-CAM
+        this.doc.text('Image avec Grad-CAM', imgRightX + 5, yPosition + imgHeight + 5);
+        
+        // Ajouter l'image composite (originale + Grad-CAM)
+        this.doc.addImage(compositeImage, 'JPEG', imgRightX, yPosition, imgWidth, imgHeight);
+        
+        yPosition += imgHeight + 15; // Espace supplémentaire pour les légendes
+      } else {
+        // Si pas de Grad-CAM, centrer l'image seule
+        const centerX = (this.pageWidth - imgWidth) / 2;
+        this.doc.addImage(imageSource, 'JPEG', centerX, yPosition, imgWidth, imgHeight);
+        yPosition += imgHeight + 10;
+      }
+      
     } catch (error) {
-      console.warn('Impossible d\'ajouter l\'image au PDF:', error);
+      console.warn('Impossible d\'ajouter les images au PDF:', error);
       yPosition += 10;
     }
     
     return yPosition;
+  }
+
+  async createCompositeImage(originalImageBase64, heatmapBase64) {
+    return new Promise((resolve, reject) => {
+      try {
+        console.log("=== COMPOSITE DEBUG ===");
+        console.log("Original image base64 length:", originalImageBase64.length);
+        console.log("Heatmap base64 length:", heatmapBase64.length);
+        
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Créer un canvas plus grand pour éviter la compression
+        canvas.width = 500;
+        canvas.height = 500;
+        
+        const originalImg = new Image();
+        const heatmapImg = new Image();
+        
+        originalImg.onload = () => {
+          console.log("Original image loaded successfully");
+          // Dessiner l'image originale à grande taille
+          ctx.drawImage(originalImg, 0, 0, 500, 500);
+          
+          heatmapImg.onload = () => {
+            console.log("Heatmap loaded successfully");
+            // Dessiner la Grad-CAM par-dessus avec transparence
+            ctx.globalAlpha = 0.7; // 70% d'opacité pour plus de visibilité
+            ctx.drawImage(heatmapImg, 0, 0, 500, 500);
+            ctx.globalAlpha = 1.0;
+            
+            // Convertir en PNG pour éviter la compression JPEG
+            const compositeBase64 = canvas.toDataURL('image/png');
+            console.log("Composite created successfully, length:", compositeBase64.length);
+            resolve(compositeBase64);
+          };
+          
+          heatmapImg.onerror = (error) => {
+            console.error('Failed to load heatmap:', error);
+            reject(new Error('Failed to load heatmap'));
+          };
+          heatmapImg.src = `data:image/png;base64,${heatmapBase64}`;
+        };
+        
+        originalImg.onerror = (error) => {
+          console.error('Failed to load original image:', error);
+          reject(new Error('Failed to load original image'));
+        };
+        originalImg.src = `data:image/jpeg;base64,${originalImageBase64}`;
+      } catch (error) {
+        console.error('Error in createCompositeImage:', error);
+        reject(error);
+      }
+    });
   }
 
   addMainFindings(analysisData, yPosition) {
@@ -271,24 +368,37 @@ export class PDFReportService {
   }
 
   addFooter() {
-    const footerY = this.pageHeight - 15;
+    const footerY = this.pageHeight - 25;
+    const lineHeight = 5;
     
     this.doc.setFontSize(8);
-    this.doc.setFont('helvetica', 'italic');
-    this.doc.setTextColor(128);
-    
-    const footerText = 'Ce rapport a été généré par RadioX - Systeme d\'analyse IA pour radiographies thoraciques. ' +
-                      'Les résultats doivent être confirmés par un professionnel de santé qualifié.';
-    
-    // Centrer le texte
-    const textWidth = this.doc.getTextWidth(footerText);
-    const xPosition = (this.pageWidth - textWidth) / 2;
-    
-    this.doc.text(footerText, xPosition, footerY);
+    this.doc.setFont('helvetica', 'normal');
+    this.doc.setTextColor(100);
     
     // Ligne au-dessus du footer
     this.doc.setDrawColor(200);
-    this.doc.line(this.margin, footerY - 5, this.pageWidth - this.margin, footerY - 5);
+    this.doc.line(this.margin, footerY - 10, this.pageWidth - this.margin, footerY - 10);
+    
+    // Footer multi-lignes comme dans l'impression
+    const footerLines = [
+      'RADIOX - Système d\'Analyse Radiographique par IA',
+      'Ce rapport a été généré automatiquement par RadioX - Les résultats doivent être confirmés par un professionnel de santé qualifié.',
+      `Modèle: DenseNet-121 NIH ChestX-ray14 | Date de génération: ${new Date().toLocaleString('fr-FR')}`
+    ];
+    
+    footerLines.forEach((line, index) => {
+      const y = footerY + (index * lineHeight);
+      const textWidth = this.doc.getTextWidth(line);
+      const xPosition = (this.pageWidth - textWidth) / 2;
+      
+      if (index === 0) {
+        this.doc.setFont('helvetica', 'bold');
+      } else {
+        this.doc.setFont('helvetica', 'normal');
+      }
+      
+      this.doc.text(line, xPosition, y);
+    });
   }
 
   getDefaultRecommendations(analysisData) {

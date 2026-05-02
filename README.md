@@ -36,14 +36,14 @@ L'application s'ouvre automatiquement sur http://localhost:3000
 
 ## Architecture
 
-```
+
 RadioX/
 ├── START_RADIOX.bat        ← Lanceur Windows (double-clic)
 ├── frontend/               ← React 18 + Vite  (port 3000)
 ├── backend/                ← FastAPI + SQLite  (port 8000)
 ├── ml_service/             ← PyTorch + torchxrayvision (port 8001)
 └── docker-compose.yml      ← Déploiement Docker
-```
+
 
 ## Déploiement Docker
 

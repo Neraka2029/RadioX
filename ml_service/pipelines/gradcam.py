@@ -18,8 +18,7 @@ class GradCAMPipeline:
         self.model = model
         self.device = next(model.parameters()).device
         self.target_layer = self._find_target_layer()
-        if self.target_layer:
-            logger.info(f"Grad-CAM target layer: {self._layer_name}")
+        # Pas de logs pour le nettoyage
 
     def _find_target_layer(self):
         self._layer_name = ""
@@ -66,59 +65,39 @@ class GradCAMPipeline:
                 else:
                     score = out.mean()
                 self.model.zero_grad()
-                score.backward()
-                self.model.eval()
+                score.backward()             
             finally:
+                self.model.eval()
                 h_fwd.remove()
                 h_bwd.remove()
 
             if "v" not in gradients or "v" not in activations:
-                print(f"GRADCAM ERROR: Missing gradients or activations")
-                print(f"Gradients keys: {list(gradients.keys())}")
-                print(f"Activations keys: {list(activations.keys())}")
+                logger.error(f"Grad-CAM missing gradients or activations")
                 return None
-
-            # Logs pour debug des gradients et activations
-            print(f"=== GRADCAM HOOKS DEBUG ===")
-            print(f"Gradients shape: {gradients['v'].shape if 'v' in gradients else 'None'}")
-            print(f"Activations shape: {activations['v'].shape if 'v' in activations else 'None'}")
-            print(f"Gradients min/max: {gradients['v'].min():.6f} / {gradients['v'].max():.6f}" if 'v' in gradients else "None")
-            print(f"Activations min/max: {activations['v'].min():.6f} / {activations['v'].max():.6f}" if 'v' in activations else "None")
-            print(f"Target class index: {target_class_idx}")
-            print(f"========================")
 
             # Calcul Grad-CAM
             grads = gradients["v"]    # [1, C, H, W]
             acts  = activations["v"]  # [1, C, H, W]
             
-            print(f"Gradients shape: {grads.shape}, min/max: {grads.min():.6f} / {grads.max():.6f}")
-            print(f"Activations shape: {acts.shape}, min/max: {acts.min():.6f} / {acts.max():.6f}")
-            
             # Poids = moyenne globale des gradients (avec valeur absolue pour éviter l'annulation)
             weights = torch.abs(grads).mean(dim=(2, 3), keepdim=True)
-            print(f"Weights shape: {weights.shape}, min/max: {weights.min():.6f} / {weights.max():.6f}")
             
             # Produit poids * activations
             weighted_acts = weights * acts
-            print(f"Weighted acts min/max: {weighted_acts.min():.6f} / {weighted_acts.max():.6f}")
             
             # Somme sur les canaux + ReLU
             cam = torch.relu(weighted_acts.sum(dim=1, keepdim=True))
-            print(f"CAM after sum+relu min/max: {cam.min():.6f} / {cam.max():.6f}")
 
             cam_np = cam.squeeze().detach().cpu().numpy()
             if cam_np.ndim == 0:
-                print(f"CAM is scalar after squeeze")
+                logger.error(f"Grad-CAM CAM is scalar after squeeze")
                 return None
-
-            print(f"CAM after squeeze: {cam_np.shape}")
-            print(f"CAM min/max after squeeze: {cam_np.min():.6f} / {cam_np.max():.6f}")
 
             # Normaliser [0, 1]
             cmin, cmax = cam_np.min(), cam_np.max()
             cam_np = (cam_np - cmin) / (cmax - cmin + 1e-8)
 
-            # Coloriser en jet et encoder PNG
+            # Coloriser en jet et encoder PNG (carte seule)
             heatmap = self._colorize(cam_np, size=(224, 224))
             buf = BytesIO()
             heatmap.save(buf, format="PNG")
@@ -133,14 +112,6 @@ class GradCAMPipeline:
             Image.fromarray((cam * 255).astype(np.uint8)).resize(size, Image.BILINEAR)
         ) / 255.0
         h, w = cam_r.shape
-        
-        # Logs pour debug
-        print(f"=== GRADCAM DEBUG ===")
-        print(f"CAM shape: {cam.shape}")
-        print(f"CAM min/max: {cam.min():.3f} / {cam.max():.3f}")
-        print(f"CAM_r min/max: {cam_r.min():.3f} / {cam_r.max():.3f}")
-        print(f"Pixels > 0.2: {np.sum(cam_r > 0.2)} / {cam_r.size}")
-        print(f"Pixels > 0.5: {np.sum(cam_r > 0.5)} / {cam_r.size}")
         
         rgba = np.zeros((h, w, 4), dtype=np.uint8)
         

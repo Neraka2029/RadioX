@@ -15,9 +15,14 @@ export default function Dashboard({ user, token, onLogout }) {
   const [uploadedImage, setUploadedImage] = useState(null);
   const [activeView, setActiveView] = useState("analysis"); // analysis | history | reports | settings
 
-  const handleAnalysisComplete = (result, imageUrl) => {
+  const handleAnalysisComplete = (result) => {
     setAnalysisResult(result);
-    setUploadedImage(imageUrl);
+    // Utiliser l'image traitée depuis le backend si disponible
+    if (result.processed_image_base64) {
+      setUploadedImage(`data:image/png;base64,${result.processed_image_base64}`);
+    } else {
+      setUploadedImage(null);
+    }
     setIsAnalyzing(false);
   };
 

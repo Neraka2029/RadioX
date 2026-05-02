@@ -42,11 +42,36 @@ export default function UploadPanel({ token, onAnalysisComplete, onAnalyzing, is
   const fileInputRef = useRef(null);
 
   const handleFile = useCallback((file) => {
-    if (!file || !file.type.startsWith("image/")) return;
+    if (!file) return;
+    
+    // Accepter les images standards et les fichiers DICOM
+    const isImage = file.type.startsWith("image/");
+    const isDicom = file.name.toLowerCase().endsWith('.dcm') || 
+                   file.name.toLowerCase().endsWith('.dicom');
+    
+    if (!isImage && !isDicom) {
+      console.log("File type not supported:", file.type, file.name);
+      return;
+    }
 
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-    analyzeImage(file, url);
+    // Pour les fichiers DICOM, créer une URL de données convertie
+    if (isDicom) {
+      console.log("Processing DICOM file for preview...");
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        // Créer une URL blob pour le preview
+        const blob = new Blob([e.target.result], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        setPreviewUrl(url);
+        analyzeImage(file, url);
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      // Pour les images standards, utiliser la méthode normale
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+      analyzeImage(file, url);
+    }
   }, []);
 
   const analyzeImage = async (file, imageUrl) => {
@@ -62,49 +87,69 @@ export default function UploadPanel({ token, onAnalysisComplete, onAnalyzing, is
       { label: "Compilation des résultats...", progress: 100, delay: 400 },
     ];
 
-    for (const phase of phases) {
-      setScanPhase(phase.label);
-      setUploadProgress(phase.progress);
-      await new Promise((r) => setTimeout(r, phase.delay));
-    }
-
     try {
-      console.log('=== UPLOAD DEBUG ===');
-      console.log('Attempting to upload to: http://localhost:8001/predict');
-      
+      // Simuler progression
+      for (const phase of phases) {
+        await new Promise((resolve) => setTimeout(resolve, phase.delay));
+        setScanPhase(phase.label);
+        setUploadProgress(phase.progress);
+      }
+
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("analysis_id", `AX-${Date.now()}`);
+
+      console.log("=== UPLOAD DEBUG ===");
+      console.log("Attempting to upload to: http://localhost:8001/predict");
+      console.log("File type:", file.type, "File name:", file.name);
+      console.log("File size:", file.size, "bytes");
 
       const response = await fetch("http://localhost:8001/predict", {
         method: "POST",
         body: formData,
       });
 
-      console.log('Response status:', response.status);
-      console.log('Response ok:', response.ok);
+      console.log("Response status:", response.status);
+      console.log("Response ok:", response.ok);
 
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Response data:', data);
-        console.log('Heatmap in response:', data.heatmap_base64 ? 'Yes' : 'No');
-        onAnalysisComplete(data, imageUrl);
-      } else {
-        console.log('Response not ok, falling back to demo');
-        throw new Error("API unavailable");
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
-    } catch (error) {
-      console.log('Error caught:', error);
-      console.log('Falling back to demo mode');
-      // Demo mode
-      await new Promise((r) => setTimeout(r, 300));
-      onAnalysisComplete(
-        { ...DEMO_RESULT, analysis_id: "AX-" + Math.random().toString(36).substr(2, 8).toUpperCase() },
-        imageUrl
-      );
-    }
 
-    setScanPhase("");
-    setUploadProgress(0);
+      const data = await response.json();
+      console.log("=== UPLOAD DEBUG ===");
+      console.log("Response data:", data);
+      console.log("Heatmap in response:", data.heatmap_base64 ? "Yes" : "No");
+      console.log("Processed image in response:", data.processed_image_base64 ? "Yes" : "No");
+
+      // Utiliser l'image traitée depuis le backend si disponible
+      if (data.processed_image_base64) {
+        const processedImageUrl = `data:image/png;base64,${data.processed_image_base64}`;
+        setPreviewUrl(processedImageUrl);
+        console.log("Using processed image from backend");
+      }
+
+      // Debug de la heatmap
+      if (data.heatmap_base64) {
+        console.log("Heatmap received, length:", data.heatmap_base64.length);
+      } else {
+        console.log("No heatmap received from backend");
+      }
+
+      onAnalysisComplete(data);
+    } catch (error) {
+      console.error("Upload failed:", error);
+      setScanPhase("Échec de l'analyse");
+      // Fallback vers mode démo si le backend n'est pas accessible
+      console.log("Falling back to demo mode");
+      const demoData = {
+        ...DEMO_RESULT,
+        analysis_id: `AX-${Date.now()}`,
+      };
+      onAnalysisComplete(demoData);
+    } finally {
+      setScanPhase("");
+    }
   };
 
   const handleDrop = (e) => {
@@ -146,7 +191,7 @@ export default function UploadPanel({ token, onAnalysisComplete, onAnalyzing, is
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*,.dcm"
+            accept="image/*,.dcm,.dicom,.DCM,.DICOM"
             onChange={(e) => handleFile(e.target.files[0])}
             className="hidden-input"
           />

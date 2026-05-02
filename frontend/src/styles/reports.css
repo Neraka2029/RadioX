@@ -168,6 +168,18 @@
   gap: 12px;
 }
 
+.modal-actions {
+  padding: 20px 0 0 0;
+  border-top: 1px solid var(--border-medium);
+}
+
+.actions-container {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  width: 100%;
+}
+
 .action-btn {
   flex: 1;
   padding: 10px 16px;

@@ -52,28 +52,38 @@ XRV_TO_RADIOX = {
     "Hernia":             "Hernie",
 }
 
-# Labels fiables — exclure ceux qui retournent 0.5 fixe dans le modèle NIH
-# Emphysema, Fibrosis, Hernia sont non fiables dans densenet121-res224-nih
+# Labels fiables — inclure Fibrosis pour détecter cette pathologie importante
 RELIABLE_LABELS = {
-    "Atelectasis", "Consolidation", "Infiltration", "Pneumothorax",
-    "Edema", "Effusion", "Pneumonia", "Pleural_Thickening",
-    "Cardiomegaly", "Nodule", "Mass",
+    "Atelectasis", 
+    "Consolidation", 
+    "Infiltration", 
+    "Pneumothorax",
+    "Edema", 
+    "Effusion",
+    "Pneumonia", 
+    "Pleural_Thickening",
+    "Cardiomegaly", 
+    "Nodule", 
+    "Mass", 
+    "Fibrosis",  # Fibrosis ajouté
 }
-# Labels exclus car retournent ~0.5 fixe : Emphysema, Fibrosis, Hernia
+# Seul Emphysema et Hernia restent exclus car retournent ~0.5 fixe
 
-# Seuil minimum par pathologie (calibré pour réduire les faux positifs)
+# Seuil minimum par pathologie (valeurs originales)
 THRESHOLDS_PER_PATHOLOGY = {
-    "Atelectasis":        0.45,
-    "Consolidation":      0.45,
-    "Infiltration":       0.45,
-    "Pneumothorax":       0.50,
-    "Edema":              0.45,
-    "Effusion":           0.45,
-    "Pneumonia":          0.45,
-    "Pleural_Thickening": 0.50,
-    "Cardiomegaly":       0.45,
-    "Nodule":             0.60,  # beaucoup de faux positifs
-    "Mass":               0.75,  # beaucoup de faux positifs
+    "Atelectasis":        0.0391,
+    "Consolidation":      0.0035,
+    "Infiltration":       0.1140,
+    "Pneumothorax":       0.0057,
+    "Edema":              0.00046,
+    "Effusion":           0.0387,
+    "Pneumonia":          0.0037,
+    "Pleural_Thickening": 0.0147,
+    "Cardiomegaly":       0.0161,
+    "Nodule":             0.0542,
+    "Mass":               0.0372,
+    "Fibrosis":           0.0120,
+    "Hernia":             0.00044,
 }
 
 SEVERITY_THRESHOLDS = {"high": 0.65, "moderate": 0.50, "low": 0.0}
@@ -120,22 +130,75 @@ class PreprocessingPipeline:
 
     def _load_image(self, image_bytes: bytes) -> Image.Image:
         is_dicom = len(image_bytes) > 132 and image_bytes[128:132] == b"DICM"
+        logger.info(f"File type detection: DICOM={is_dicom}, file size={len(image_bytes)} bytes")
+        
         if is_dicom:
             try:
                 import pydicom
                 from pydicom.filebase import DicomBytesIO
-                ds = pydicom.dcmread(DicomBytesIO(image_bytes))
-                arr = ds.pixel_array.astype(np.float32)
+                logger.info("Processing DICOM file...")
+                
+                # Essayer de lire avec différentes options
+                try:
+                    ds = pydicom.dcmread(DicomBytesIO(image_bytes))
+                except Exception as e1:
+                    logger.warning(f"Standard DICOM read failed: {e1}")
+                    # Essayer sans forcer la lecture des pixels
+                    ds = pydicom.dcmread(DicomBytesIO(image_bytes), stop_before_pixels=True)
+                    logger.info("DICOM header loaded successfully")
+                
+                logger.info(f"DICOM loaded: {ds.PatientName if hasattr(ds, 'PatientName') else 'Unknown patient'}")
+                
+                # Essayer différentes méthodes pour obtenir les pixels
+                try:
+                    arr = ds.pixel_array.astype(np.float32)
+                    logger.info(f"Pixel array shape: {arr.shape}, dtype: {arr.dtype}")
+                except Exception as e2:
+                    logger.error(f"Pixel array extraction failed: {e2}")
+                    # Si ça échoue, essayer de convertir en image standard
+                    try:
+                        # Sauvegarder temporairement et recharger avec PIL
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix='.dcm', delete=False) as tmp:
+                            tmp.write(image_bytes)
+                            tmp.flush()
+                            
+                        # Utiliser une bibliothèque externe ou fallback
+                        logger.error("Cannot extract DICOM pixels, falling back to standard processing")
+                        raise Exception("DICOM pixel extraction failed")
+                    except Exception as e3:
+                        logger.error(f"All DICOM extraction methods failed: {e3}")
+                        raise
+                
                 if hasattr(ds, "RescaleSlope"):
                     arr = arr * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
+                    logger.info(f"Applied rescaling: slope={ds.RescaleSlope}, intercept={ds.RescaleIntercept}")
+                    
                 arr = ((arr - arr.min()) / max(arr.max() - arr.min(), 1) * 255).astype(np.uint8)
                 if getattr(ds, "PhotometricInterpretation", "") == "MONOCHROME1":
                     arr = 255 - arr
+                    logger.info("Applied MONOCHROME1 inversion")
+                    
                 if arr.ndim == 3:
                     arr = arr[0]
-                return Image.fromarray(arr)
+                    logger.info("Extracted first channel from 3D array")
+                    
+                img = Image.fromarray(arr)
+                logger.info(f"DICOM processing successful: image size={img.size}")
+                
+                # S'assurer que l'image est en RGB pour l'affichage web
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                    logger.info(f"Converted image to RGB mode")
+                
+                return img
+                
             except Exception as e:
-                logger.warning(f"DICOM error: {e}")
+                logger.error(f"DICOM processing failed: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                
+        logger.info("Falling back to standard image processing")
         return Image.open(BytesIO(image_bytes))
 
     def process(self, image_bytes: bytes) -> torch.Tensor:
@@ -143,7 +206,7 @@ class PreprocessingPipeline:
         import skimage.transform
 
         img = self._load_image(image_bytes)
-
+        
         # Convertir en niveaux de gris
         if img.mode == "RGBA":
             img = img.convert("RGB")
@@ -153,15 +216,18 @@ class PreprocessingPipeline:
         else:
             arr = np.array(img.convert("L")).astype(np.float32)
 
-        # Normalisation officielle xrv AVANT resize : [0,255] -> [-1024,1024]
+        # Vérifier si l'image vient d'un DICOM déjà normalisé
+        is_dicom = len(image_bytes) > 132 and image_bytes[128:132] == b"DICM"
+        if is_dicom:
+            logger.info("DICOM detected")
+        else:
+            logger.info("Standard image detected")
+        
+        # Preprocessing DICOM unifié - identique pour DICOM et JPEG
         arr = xrv.datasets.normalize(arr, maxval=255, reshape=False)
-
-        # Resize avec preserve_range pour garder l'échelle [-1024,1024]
-        arr = skimage.transform.resize(
-            arr, (IMAGE_SIZE, IMAGE_SIZE),
-            anti_aliasing=True,
-            preserve_range=True,
-        ).astype(np.float32)
+        arr = skimage.transform.resize(arr, (224, 224),
+              anti_aliasing=True, preserve_range=True).astype(np.float32)
+        # identique DICOM et JPEG
 
         tensor = torch.from_numpy(arr).unsqueeze(0).unsqueeze(0)
         logger.info(f"Preprocessing OK: min={tensor.min():.0f}, max={tensor.max():.0f}, mean={tensor.mean():.0f}")
@@ -182,7 +248,7 @@ class InferencePipeline:
     def _load_model(self):
         try:
             import torchxrayvision as xrv
-            model = xrv.models.DenseNet(weights="densenet121-res224-all")
+            model = xrv.models.DenseNet(weights="densenet121-res224-nih")
             self.xrv_labels = list(model.pathologies)
             logger.info(f"Modèle NIH chargé — {len(self.xrv_labels)} labels")
             return model.to(self.device)
@@ -192,7 +258,16 @@ class InferencePipeline:
             raise RuntimeError(f"Erreur chargement modèle: {e}")
 
     def preprocess(self, image_bytes: bytes) -> torch.Tensor:
-        return self.preprocessor.process(image_bytes)
+        self.processed_image = self.preprocessor.process(image_bytes)
+        return self.processed_image
+
+    def get_processed_image(self, image_bytes: bytes) -> Image.Image:
+        """Retourne l'image traitée pour l'affichage."""
+        try:
+            return self.preprocessor._load_image(image_bytes)
+        except Exception as e:
+            logger.error(f"Failed to get processed image: {e}")
+            return None
 
     @torch.no_grad()
     def predict(self, tensor: torch.Tensor) -> List[Dict]:
@@ -201,19 +276,26 @@ class InferencePipeline:
 
     def _build_results(self, output: torch.Tensor) -> List[Dict]:
         probs = np.clip(output.squeeze().detach().cpu().numpy(), 0.0, 1.0)
-
-        # Log des scores bruts (labels fiables uniquement)
-        raw_log = {
-            lbl: round(float(probs[i]), 3)
-            for i, lbl in enumerate(self.xrv_labels)
-            if i < len(probs) and lbl in RELIABLE_LABELS
-        }
-        logger.info(f"XRV scores: {raw_log}")
+        
+        # ← Ajouter cette ligne temporairement avec print pour être sûr de voir
+        print(f"=== RAW SCORES ===")
+        raw_scores = {self.xrv_labels[i]: round(float(probs[i]),4) for i in range(len(self.xrv_labels))}
+        for label, score in raw_scores.items():
+            print(f"{label}: {score}")
+        print(f"==================")
+        
+        # Logger aussi
+        logger.info(f"Raw scores: {raw_scores}")
 
         results = []
         max_prob = 0.0
 
         for xrv_lbl, radiox_lbl in XRV_TO_RADIOX.items():
+            # Ne traiter que les labels présents ET valides dans le modèle
+            if xrv_lbl not in self.xrv_labels:
+                prob = 0.0
+                continue
+            
             try:
                 idx = self.xrv_labels.index(xrv_lbl)
                 prob = round(float(probs[idx]), 4)
@@ -235,7 +317,7 @@ class InferencePipeline:
                 "probability":  prob,
                 "severity":     self._severity(prob),
                 "description":  PATHOLOGY_DESCRIPTIONS.get(radiox_lbl, ""),
-                "color":        PATHOLOGY_COLORS.get(radiox_lbl, "#4488ff"),
+                "color":        PATHOLOGY_COLORS.get(radiox_lbl, "#ffffff"),
             })
 
         # Trier par probabilité décroissante
@@ -251,8 +333,6 @@ class InferencePipeline:
             "color":       PATHOLOGY_COLORS["Normal"],
         })
 
-        top3 = [(r["pathology"], r["probability"]) for r in results[1:4]]
-        logger.info(f"Top 3 pathologies: {top3}")
         return results
 
     def _severity(self, p: float) -> str:
