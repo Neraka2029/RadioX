@@ -10,12 +10,20 @@ from io import BytesIO
 from PIL import Image
 import logging
 import os
-from typing import List, Dict
+from typing import List, Dict, Any
+
+from pipelines.heuristic_predictors import (
+    compute_fracture_risk_raw,
+    compute_tuberculosis_risk_raw,
+    make_additional_result,
+)
+from pipelines.xrv_all_support import XRVAllSupport, DISPLAY_MIN_SCORE
+from pipelines.decision_support import build_decision_support
 
 logger = logging.getLogger(__name__)
 IMAGE_SIZE = 224
 
-# ── 14 pathologies NIH + Normal ───────────────────────────────────────────
+# ── 14 pathologies NIH + Normal + 2 pathologies additionnelles ─────────────
 PATHOLOGY_LABELS = [
     "Normal",
     "Atelectasie",
@@ -32,6 +40,8 @@ PATHOLOGY_LABELS = [
     "Nodule",
     "Masse",
     "Hernie",
+    "Tuberculose",
+    "Fracture costale",
 ]
 
 # Mapping direct NIH label -> label RadioX (1:1)
@@ -50,6 +60,9 @@ XRV_TO_RADIOX = {
     "Nodule":             "Nodule",
     "Mass":               "Masse",
     "Hernia":             "Hernie",
+    # Pathologies additionnelles (mapping pour modèles futurs)
+    "Tuberculosis":      "Tuberculose",
+    "Fracture":           "Fracture costale",
 }
 
 # Labels fiables — inclure Fibrosis pour détecter cette pathologie importante
@@ -84,10 +97,12 @@ THRESHOLDS_PER_PATHOLOGY = {
     "Mass":               0.0372,
     "Fibrosis":           0.0120,
     "Hernia":             0.00044,
+    # Seuils dédiés pour pathologies additionnelles
+    "Tuberculosis":      0.60,
+    "Fracture":           0.35,
 }
 
 SEVERITY_THRESHOLDS = {"high": 0.65, "moderate": 0.50, "low": 0.0}
-
 PATHOLOGY_DESCRIPTIONS = {
     "Normal":                 "Aucune anomalie détectée",
     "Atelectasie":            "Collapse partiel ou total d'un lobe pulmonaire",
@@ -104,6 +119,8 @@ PATHOLOGY_DESCRIPTIONS = {
     "Nodule":                 "Petite lésion arrondie < 3cm dans le poumon",
     "Masse":                  "Lésion de grande taille > 3cm dans le poumon",
     "Hernie":                 "Saillie d'un organe à travers le diaphragme",
+    "Tuberculose":            "Infection bactérienne chronique (Mycobacterium tuberculosis)",
+    "Fracture costale":       "Rupture d'un ou plusieurs os de la cage thoracique",
 }
 
 PATHOLOGY_COLORS = {
@@ -122,6 +139,8 @@ PATHOLOGY_COLORS = {
     "Nodule":                 "#ff9ff3",
     "Masse":                  "#ee5a24",
     "Hernie":                 "#c8d6e5",
+    "Tuberculose":            "#ff6b81",
+    "Fracture costale":       "#ff7f50",
 }
 
 
@@ -235,7 +254,7 @@ class PreprocessingPipeline:
 
 
 class InferencePipeline:
-    """Pipeline principal utilisant torchxrayvision DenseNet-121 NIH."""
+    """Pipeline principal utilisant torchxrayvision DenseNet-121 NIH + modèles additionnels."""
 
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -243,6 +262,10 @@ class InferencePipeline:
         self.xrv_labels = None
         self.model = self._load_model()
         self.model.eval()
+
+        self.xrv_all = XRVAllSupport(self.device)
+        self.last_specialized_output = _empty_specialized_output()
+
         logger.info(f"InferencePipeline prêt sur {self.device}")
 
     def _load_model(self):
@@ -272,24 +295,21 @@ class InferencePipeline:
     @torch.no_grad()
     def predict(self, tensor: torch.Tensor) -> List[Dict]:
         output = self.model(tensor.to(self.device))
-        return self._build_results(output)
+        return self._build_results(output, tensor)
 
-    def _build_results(self, output: torch.Tensor) -> List[Dict]:
+    def _build_results(self, output: torch.Tensor, tensor: torch.Tensor) -> List[Dict]:
         probs = np.clip(output.squeeze().detach().cpu().numpy(), 0.0, 1.0)
         
-        # ← Ajouter cette ligne temporairement avec print pour être sûr de voir
-        print(f"=== RAW SCORES ===")
-        raw_scores = {self.xrv_labels[i]: round(float(probs[i]),4) for i in range(len(self.xrv_labels))}
-        for label, score in raw_scores.items():
-            print(f"{label}: {score}")
-        print(f"==================")
-        
-        # Logger aussi
-        logger.info(f"Raw scores: {raw_scores}")
+        raw_scores = {
+            self.xrv_labels[i]: round(float(probs[i]), 4)
+            for i in range(len(self.xrv_labels))
+        }
+        logger.info("NIH raw scores: %s", raw_scores)
 
         results = []
         max_prob = 0.0
 
+        # Pathologies NIH standard
         for xrv_lbl, radiox_lbl in XRV_TO_RADIOX.items():
             # Ne traiter que les labels présents ET valides dans le modèle
             if xrv_lbl not in self.xrv_labels:
@@ -320,6 +340,9 @@ class InferencePipeline:
                 "color":        PATHOLOGY_COLORS.get(radiox_lbl, "#ffffff"),
             })
 
+        # TB + Fracture via XRV-ALL (fallback heuristique NIH si indisponible)
+        max_prob = self._append_specialized_pathologies(results, max_prob, tensor)
+
         # Trier par probabilité décroissante
         results.sort(key=lambda x: x["probability"], reverse=True)
 
@@ -335,10 +358,116 @@ class InferencePipeline:
 
         return results
 
+    def _append_specialized_pathologies(
+        self,
+        results: List[Dict],
+        max_prob: float,
+        tensor: torch.Tensor,
+    ) -> float:
+        fracture_detections: List[Dict[str, Any]] = []
+        xrv_out = self.xrv_all.predict_scores(tensor)
+
+        if xrv_out is not None:
+            tb_probability = float(xrv_out["tuberculosis_probability"])
+            fracture_probability = float(xrv_out["fracture_risk_score"])
+            tuberculosis_mode = "xrv-all"
+            fracture_mode = "xrv-all"
+            tb_source = "xrv-all"
+            fracture_source = "xrv-all"
+            logger.info(
+                "Clinical enrichment XRV-ALL: TB=%.4f fracture=%.4f",
+                tb_probability,
+                fracture_probability,
+            )
+        else:
+            tb_probability = compute_tuberculosis_risk_raw(results)
+            fracture_probability = compute_fracture_risk_raw(results)
+            tuberculosis_mode = "heuristic"
+            fracture_mode = "heuristic" if fracture_probability > 0 else "none"
+            tb_source = "heuristic"
+            fracture_source = "nih_risk_indicator"
+            logger.warning(
+                "XRV-ALL unavailable — NIH heuristic fallback TB=%.4f fracture=%.4f",
+                tb_probability,
+                fracture_probability,
+            )
+
+        tb_display = XRVAllSupport.display_score(tb_probability, DISPLAY_MIN_SCORE)
+        fracture_display = XRVAllSupport.display_score(
+            fracture_probability, DISPLAY_MIN_SCORE
+        )
+
+        decision = build_decision_support(
+            tuberculosis_probability=tb_probability,
+            tuberculosis_display_score=tb_display,
+            tuberculosis_mode=tuberculosis_mode,
+            fracture_risk_score=fracture_probability,
+            fracture_display_score=fracture_display,
+            fracture_mode=fracture_mode,
+            fracture_detections=fracture_detections,
+        )
+
+        self.last_specialized_output = {
+            "tuberculosis_probability": tb_probability,
+            "tuberculosis_display_score": tb_display,
+            "tuberculosis_mode": tuberculosis_mode,
+            "tuberculosis_source": tb_source,
+            "fracture_detections": fracture_detections,
+            "fracture_risk_score": fracture_probability,
+            "fracture_display_score": fracture_display,
+            "fracture_mode": fracture_mode,
+            "fracture_source": fracture_source,
+            "alerts": decision["alerts"],
+            "decision_support": decision["decision_support"],
+            "tuberculose_score": tb_display,
+            "fracture_score": fracture_display,
+            "derived_source": "xrv-all" if tuberculosis_mode == "xrv-all" else "heuristic",
+        }
+
+        for label, prob in (
+            ("Tuberculose", tb_display),
+            ("Fracture costale", fracture_display),
+        ):
+            entry = make_additional_result(
+                label,
+                prob,
+                self._severity,
+                PATHOLOGY_DESCRIPTIONS,
+                PATHOLOGY_COLORS,
+            )
+            if entry:
+                results.append(entry)
+                max_prob = max(max_prob, entry["probability"])
+        return max_prob
+
     def _severity(self, p: float) -> str:
         if p >= SEVERITY_THRESHOLDS["high"]:     return "high"
         if p >= SEVERITY_THRESHOLDS["moderate"]: return "moderate"
         return "low"
+
+
+def _empty_specialized_output() -> Dict:
+    return {
+        "tuberculosis_probability": 0.0,
+        "tuberculosis_display_score": 0.0,
+        "tuberculosis_source": "none",
+        "fracture_detections": [],
+        "fracture_risk_score": 0.0,
+        "fracture_source": "none",
+        "alerts": [],
+        "tuberculose_score": 0.0,
+        "fracture_score": 0.0,
+        "derived_source": "none",
+        "tuberculosis_mode": "heuristic",
+        "fracture_mode": "none",
+        "decision_support": {
+            "tb_suspected": False,
+            "fracture_suspected": False,
+            "tuberculosis_mode": "heuristic",
+            "fracture_mode": "none",
+            "recommended_action": "Analyse non disponible.",
+        },
+    }
 
 
 # Alias pour train.py

@@ -17,6 +17,11 @@ export default function Dashboard({ user, token, onLogout }) {
 
   const handleAnalysisComplete = (result) => {
     setAnalysisResult(result);
+    try {
+      sessionStorage.setItem("radiox:lastAnalysis", JSON.stringify(result));
+    } catch {
+      /* quota / private mode */
+    }
     // Utiliser l'image traitée depuis le backend si disponible
     if (result.processed_image_base64) {
       setUploadedImage(`data:image/png;base64,${result.processed_image_base64}`);
@@ -88,7 +93,9 @@ export default function Dashboard({ user, token, onLogout }) {
           
           {activeView === "history" && <HistoryPanel />}
           
-          {activeView === "reports" && <ReportsPanel />}
+          {activeView === "reports" && (
+            <ReportsPanel latestAnalysis={analysisResult} />
+          )}
           
           {activeView === "settings" && <SettingsPanel user={user} onLogout={onLogout} />}
         </div>

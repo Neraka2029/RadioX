@@ -115,25 +115,80 @@ async def predict(
                 logger.error(f"Grad-CAM generation failed: {e}")
                 heatmap_b64 = None
 
-        # Mettre à jour les statistiques
-        _update_stats(predictions, analysis_id, content, processed_image_b64, heatmap_b64)
-        
         # Log des prédictions pour debug
         logger.info(f"Predictions: {predictions[:3]}...")  # Premieres 3 prédictions
 
-        return {
+        spec = getattr(inference_pipeline, "last_specialized_output", {}) or {}
+        nih_only = ("Tuberculose", "Risque fracture costale")
+        nih_predictions = {
+            p["pathology"]: p["probability"]
+            for p in predictions
+            if p["pathology"] not in nih_only
+        }
+
+        tuberculose_score = float(spec.get("tuberculose_score", 0.0))
+        fracture_score = float(spec.get("fracture_score", 0.0))
+        alerts = list(spec.get("alerts", []))
+
+        decision_support = spec.get("decision_support") or {
+            "tb_suspected": False,
+            "fracture_suspected": False,
+            "recommended_action": "Analyse standard — corrélation clinique.",
+        }
+        recs = _generate_recommendations(predictions)
+        action = decision_support.get("recommended_action")
+        if action and action not in recs:
+            recs = [action] + recs
+
+        result = {
             "analysis_id": analysis_id,
             "predictions": predictions,
+            "nih_predictions": nih_predictions,
+            "tuberculosis_probability": float(spec.get("tuberculosis_probability", 0.0)),
+            "tuberculose_score": tuberculose_score,
+            "fracture_detections": spec.get("fracture_detections", []),
+            "fracture_risk_score": float(spec.get("fracture_risk_score", 0.0)),
+            "fracture_score": fracture_score,
+            "tuberculosis_mode": spec.get("tuberculosis_mode", "heuristic"),
+            "fracture_mode": spec.get("fracture_mode", "none"),
+            "tuberculosis_source": spec.get("tuberculosis_source", "none"),
+            "fracture_source": spec.get("fracture_source", "none"),
+            "alerts": alerts,
+            "decision_support": decision_support,
             "primary_finding": max(predictions, key=lambda x: x["probability"])["pathology"],
             "confidence": max(p["probability"] for p in predictions),
-            "model_version": "DenseNet121-NIH-xrv",
+            "model_version": "DenseNet121-NIH-xrv+XRV-ALL",
+            "derived_source": spec.get("derived_source", "none"),
             "heatmap_base64": heatmap_b64,
             "processed_image_base64": processed_image_b64,
-            "recommendations": _generate_recommendations(predictions),
+            "recommendations": recs,
         }
+
+        _update_stats(
+            predictions,
+            analysis_id,
+            content,
+            processed_image_b64,
+            heatmap_b64,
+            clinical_meta=result,
+        )
+
+        return result
     except Exception as e:
         logger.error(f"Inference error: {e}")
         return _fallback_prediction(analysis_id)
+
+
+@app.get("/analysis/{analysis_id}")
+async def get_analysis(analysis_id: str):
+    """Retourne l'enregistrement complet d'une analyse (scores cliniques inclus)."""
+    global analysis_history
+
+    for record in analysis_history:
+        if record.get("analysis_id") == analysis_id or record.get("id") == analysis_id:
+            return {"success": True, "analysis": record}
+
+    return {"success": False, "error": "Analyse non trouvée"}
 
 
 @app.get("/analysis/{analysis_id}/image")
@@ -295,7 +350,13 @@ async def get_reports():
             "images": record["image_count"],
             "status": "completed" if record["confidence"] > 50 else "review",
             "analysis_id": record["id"],
-            "predictions": record["predictions"]
+            "predictions": record["predictions"],
+            "tuberculosis_probability": record.get("tuberculosis_probability", 0.0),
+            "tuberculose_score": record.get("tuberculose_score", 0.0),
+            "fracture_risk_score": record.get("fracture_risk_score", 0.0),
+            "fracture_score": record.get("fracture_score", 0.0),
+            "fracture_mode": record.get("fracture_mode", "none"),
+            "fracture_detections": record.get("fracture_detections", []),
         }
         reports.append(report)
         logger.info(f"Report generated: {report['findings']}")
@@ -365,15 +426,39 @@ def _fallback_prediction(analysis_id: str) -> dict:
         "analysis_id": analysis_id,
         "error": "Model not loaded",
         "predictions": [],
+        "nih_predictions": {},
+        "tuberculosis_probability": 0.0,
+        "tuberculose_score": 0.0,
+        "fracture_detections": [],
+        "fracture_risk_score": 0.0,
+        "fracture_score": 0.0,
+        "alerts": ["Modèle IA non disponible."],
+        "tuberculosis_mode": "heuristic",
+        "fracture_mode": "none",
+        "decision_support": {
+            "tb_suspected": False,
+            "fracture_suspected": False,
+            "tuberculosis_mode": "heuristic",
+            "fracture_mode": "none",
+            "recommended_action": "Service IA indisponible — réessayer ou interprétation manuelle.",
+        },
         "primary_finding": "Indéterminé",
         "confidence": 0.0,
         "model_version": "not_loaded",
+        "derived_source": "none",
         "heatmap_base64": None,
         "recommendations": ["Modèle IA non disponible. Veuillez réessayer ultérieurement."],
     }
 
 
-def _update_stats(predictions: list, analysis_id: str = None, image_data: bytes = None, processed_image_b64: str = None, heatmap_b64: str = None):
+def _update_stats(
+    predictions: list,
+    analysis_id: str = None,
+    image_data: bytes = None,
+    processed_image_b64: str = None,
+    heatmap_b64: str = None,
+    clinical_meta: dict = None,
+):
     """Met à jour les statistiques après chaque analyse."""
     global stats, analysis_history, patient_counter, analysis_images
     
@@ -414,6 +499,7 @@ def _update_stats(predictions: list, analysis_id: str = None, image_data: bytes 
     
     # Ajouter à l'historique
     current_patient = f"P{patient_counter:04d}"  # P0001, P0002, etc.
+    clinical_meta = clinical_meta or {}
     analysis_record = {
         "id": analysis_id or f"AX-{datetime.now().strftime('%Y%m%d')}-{len(analysis_history) + 1:03d}",
         "analysis_id": analysis_id or f"AX-{datetime.now().strftime('%Y%m%d')}-{len(analysis_history) + 1:03d}",
@@ -426,7 +512,15 @@ def _update_stats(predictions: list, analysis_id: str = None, image_data: bytes 
         "detected_pathologies": detected_pathologies,
         "status": "completed",
         "image_count": 1,
-        "heatmap_base64": heatmap_b64  # ← AJOUTER LA GRAD-CAM
+        "heatmap_base64": heatmap_b64,
+        "tuberculosis_probability": float(
+            clinical_meta.get("tuberculosis_probability", 0.0)
+        ),
+        "tuberculose_score": float(clinical_meta.get("tuberculose_score", 0.0)),
+        "fracture_risk_score": float(clinical_meta.get("fracture_risk_score", 0.0)),
+        "fracture_score": float(clinical_meta.get("fracture_score", 0.0)),
+        "fracture_mode": clinical_meta.get("fracture_mode", "none"),
+        "fracture_detections": clinical_meta.get("fracture_detections", []),
     }
     
     analysis_history.insert(0, analysis_record)  # Ajouter au début (plus récent d'abord)

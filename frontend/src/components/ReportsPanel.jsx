@@ -1,5 +1,9 @@
 import { useState, useEffect } from "react";
 import pdfService from "../services/pdfService";
+import {
+  mergeDisplayPredictions,
+  buildClinicalConclusion,
+} from "../utils/clinicalPriority";
 import "../styles/reports.css";
 
 export default function ReportsPanel() {
@@ -101,7 +105,11 @@ export default function ReportsPanel() {
         date: report.date,
         confidence: report.confidence,
         predictions: report.predictions || [],
-        recommendations: report.findings || []
+        tuberculosis_probability: report.tuberculosis_probability,
+        fracture_risk_score: report.fracture_risk_score,
+        fracture_mode: report.fracture_mode,
+        fracture_detections: report.fracture_detections,
+        recommendations: report.recommendations || report.findings || [],
       };
       
       // Générer le PDF
@@ -169,24 +177,8 @@ export default function ReportsPanel() {
             </div>
 
             <div className="report-findings">
-              <h4>Détections principales :</h4>
-              <ul>
-                {report.findings_detail && report.findings_detail.length > 0 ? (
-                  report.findings_detail.map((finding, index) => (
-                    <li key={index}>
-                      {finding.pathology} ({Math.round((finding.probability || 0) * 100)}%)
-                    </li>
-                  ))
-                ) : (
-                  report.findings && report.findings.length > 0 ? (
-                    report.findings.map((finding, index) => (
-                      <li key={index}>{finding}</li>
-                    ))
-                  ) : (
-                    <li>Aucune pathologie détectée</li>
-                  )
-                )}
-              </ul>
+              <h4>Conclusion clinique :</h4>
+              <ReportClinicalSummary report={report} />
             </div>
 
             <div className="report-actions">
@@ -246,28 +238,8 @@ export default function ReportsPanel() {
               </div>
               
               <div className="findings-section">
-                <h4>Détections IA</h4>
-                {selectedReport.findings_detail && selectedReport.findings_detail.length > 0 ? (
-                  selectedReport.findings_detail.map((finding, index) => (
-                    <div key={index} className="finding-item">
-                      <span className="finding-bullet">•</span>
-                      <span className="finding-text">
-                        {finding.pathology} ({Math.round((finding.probability || 0) * 100)}%)
-                      </span>
-                      <span className={`finding-severity ${finding.severity}`}>
-                        {finding.severity === 'high' ? 'Élevé' : 
-                         finding.severity === 'moderate' ? 'Modéré' : 'Faible'}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  selectedReport.findings.map((finding, index) => (
-                    <div key={index} className="finding-item">
-                      <span className="finding-bullet">•</span>
-                      {finding}
-                    </div>
-                  ))
-                )}
+                <h4>Conclusion clinique principale</h4>
+                <ReportClinicalSummary report={selectedReport} detailed />
               </div>
 
               <div className="modal-actions">
@@ -294,4 +266,58 @@ export default function ReportsPanel() {
     if (confidence >= 60) return "#ffd32a";
     return "#ff4757";
   }
+}
+
+function ReportClinicalSummary({ report, detailed = false }) {
+  const analysisLike = {
+    predictions: report.predictions || [],
+    tuberculosis_probability: report.tuberculosis_probability,
+    fracture_risk_score: report.fracture_risk_score,
+    fracture_mode: report.fracture_mode,
+    fracture_detections: report.fracture_detections,
+  };
+
+  const merged = mergeDisplayPredictions(analysisLike);
+  const clinical = buildClinicalConclusion(analysisLike, merged);
+
+  if (!clinical.primary) {
+    return (
+      <ul>
+        <li>Aucune conclusion clinique disponible</li>
+      </ul>
+    );
+  }
+
+  const pct = Math.round(
+    (clinical.primary.confidence ?? clinical.primary.probability ?? 0) * 100
+  );
+
+  return (
+    <div className="report-clinical-summary">
+      <p className="clinical-primary-line">
+        <strong>{clinical.conclusionLine || `${clinical.primary.pathology} (${pct}%)`}</strong>
+      </p>
+      {detailed && clinical.contributors.length > 0 && (
+        <>
+          <p className="clinical-contributors-title">Anomalies contributrices :</p>
+          <ul>
+            {clinical.contributors.map((c) => (
+              <li key={c.pathology}>
+                {c.pathology} ({Math.round(c.probability * 100)}%)
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {!detailed && clinical.contributors.length > 0 && (
+        <ul>
+          {clinical.contributors.slice(0, 3).map((c) => (
+            <li key={c.pathology}>
+              {c.pathology} ({Math.round(c.probability * 100)}%)
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }

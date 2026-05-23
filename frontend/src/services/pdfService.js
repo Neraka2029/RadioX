@@ -1,5 +1,9 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import {
+  getClinicalDisplayState,
+  buildPdfAnalysisPayload,
+} from '../utils/clinicalPriority';
 
 export class PDFReportService {
   constructor() {
@@ -10,9 +14,11 @@ export class PDFReportService {
     this.contentWidth = this.pageWidth - 2 * this.margin;
   }
 
-  async generateAnalysisReport(analysisData, imageData) {
+  async generateAnalysisReport(analysisData, imageData, clinicalState = null) {
     this.doc = new jsPDF('p', 'mm', 'a4');
-    
+    const payload = buildPdfAnalysisPayload(analysisData) ?? analysisData;
+    this._clinicalState = clinicalState ?? getClinicalDisplayState(payload);
+
     // Configuration des polices
     this.doc.setFont('helvetica');
     
@@ -33,10 +39,7 @@ export class PDFReportService {
     // 5. Tableau détaillé des pathologies
     yPosition = this.addDetailedPathologies(analysisData, yPosition);
     
-    // 6. Recommandations
-    yPosition = this.addRecommendations(analysisData, yPosition);
-    
-    // 7. Pied de page
+    // 6. Pied de page
     this.addFooter();
     
     return this.doc;
@@ -93,11 +96,16 @@ export class PDFReportService {
     this.doc.setFontSize(10);
     this.doc.setFont('helvetica', 'normal');
     
+    const { clinical } = this._clinicalState;
+    const primaryPct = clinical.primary
+      ? Math.round((clinical.primary.confidence ?? clinical.primary.probability ?? 0) * 100)
+      : (analysisData.confidence || 0);
+
     const patientInfo = [
       `ID Patient: ${analysisData.patientId || 'N/A'}`,
       `ID Analyse: ${analysisData.analysis_id || 'N/A'}`,
       `Date: ${analysisData.date || new Date().toLocaleDateString('fr-FR')}`,
-      `Confiance: ${analysisData.confidence || 0}%`
+      `Conclusion principale: ${clinical.primary?.pathology || 'N/A'} (${primaryPct}%)`
     ];
     
     patientInfo.forEach(info => {
@@ -219,42 +227,58 @@ export class PDFReportService {
   addMainFindings(analysisData, yPosition) {
     this.doc.setFontSize(12);
     this.doc.setFont('helvetica', 'bold');
-    this.doc.text('Résultats Principaux', this.margin, yPosition);
-    
+    this.doc.text('Conclusion clinique principale', this.margin, yPosition);
+
     yPosition += 8;
-    
-    if (analysisData.predictions && analysisData.predictions.length > 0) {
-      // Trouver la prédiction principale
-      const mainPrediction = analysisData.predictions.reduce((a, b) => 
-        a.probability > b.probability ? a : b
-      );
-      
+    const { clinical } = this._clinicalState;
+
+    if (clinical.primary) {
       this.doc.setFontSize(11);
       this.doc.setFont('helvetica', 'bold');
-      this.doc.text(`Pathologie principale: ${mainPrediction.pathology}`, this.margin + 5, yPosition);
-      
+      this.doc.text('Conclusion clinique :', this.margin + 5, yPosition);
       yPosition += 6;
-      
+
       this.doc.setFontSize(10);
       this.doc.setFont('helvetica', 'normal');
-      this.doc.text(`Confiance: ${Math.round(mainPrediction.probability * 100)}%`, this.margin + 5, yPosition);
-      
+      this.doc.text(clinical.conclusionLine, this.margin + 5, yPosition);
       yPosition += 6;
-      
-      // Ajouter la couleur de confiance
-      const confidenceColor = this.getConfidenceColor(mainPrediction.probability);
+
+      const confidence = clinical.primary.confidence ?? clinical.primary.probability ?? 0;
+      const confidenceColor = this.getConfidenceColor(confidence);
       this.doc.setTextColor(confidenceColor.r, confidenceColor.g, confidenceColor.b);
-      this.doc.text(`Niveau de risque: ${this.getSeverityLabel(mainPrediction.severity)}`, this.margin + 5, yPosition);
-      this.doc.setTextColor(0, 0, 0); // Reset couleur
-      
+      this.doc.text(
+        `Niveau de risque : ${this.getSeverityLabel(clinical.primary.severity)}`,
+        this.margin + 5,
+        yPosition
+      );
+      this.doc.setTextColor(0, 0, 0);
       yPosition += 8;
+
+      if (clinical.contributors.length > 0) {
+        this.doc.setFontSize(10);
+        this.doc.setFont('helvetica', 'bold');
+        this.doc.text('Anomalies contributrices :', this.margin + 5, yPosition);
+        yPosition += 6;
+
+        this.doc.setFont('helvetica', 'normal');
+        clinical.contributors.forEach((contributor) => {
+          if (yPosition > this.pageHeight - 30) {
+            this.doc.addPage();
+            yPosition = this.margin;
+          }
+          const line = `- ${contributor.pathology} (${Math.round(contributor.probability * 100)}%)`;
+          this.doc.text(line, this.margin + 8, yPosition);
+          yPosition += 5;
+        });
+        yPosition += 4;
+      }
     } else {
       this.doc.setFontSize(10);
       this.doc.setFont('helvetica', 'italic');
-      this.doc.text('Aucune prédiction disponible', this.margin + 5, yPosition);
+      this.doc.text('Aucune conclusion clinique disponible', this.margin + 5, yPosition);
       yPosition += 8;
     }
-    
+
     return yPosition;
   }
 
@@ -265,7 +289,9 @@ export class PDFReportService {
     
     yPosition += 8;
     
-    if (analysisData.predictions && analysisData.predictions.length > 0) {
+    const { displayPredictions } = this._clinicalState;
+
+    if (displayPredictions.length > 0) {
       // En-tête du tableau
       const headers = ['Pathologie', 'Confiance', 'Risque'];
       const columnWidths = [80, 40, 40];
@@ -285,9 +311,11 @@ export class PDFReportService {
       this.doc.line(this.margin, yPosition, this.pageWidth - this.margin, yPosition);
       yPosition += 4;
       
-      // Données du tableau
+      // Données du tableau (même logique d'affichage que l'écran résultats)
       this.doc.setFont('helvetica', 'normal');
-      const sortedPredictions = analysisData.predictions.sort((a, b) => b.probability - a.probability);
+      const sortedPredictions = [...displayPredictions].sort(
+        (a, b) => b.probability - a.probability
+      );
       
       sortedPredictions.forEach((prediction, index) => {
         if (yPosition > this.pageHeight - 30) {
@@ -325,48 +353,6 @@ export class PDFReportService {
     return yPosition;
   }
 
-  addRecommendations(analysisData, yPosition) {
-    this.doc.setFontSize(12);
-    this.doc.setFont('helvetica', 'bold');
-    this.doc.text('Recommandations Cliniques', this.margin, yPosition);
-    
-    yPosition += 8;
-    
-    if (analysisData.recommendations && analysisData.recommendations.length > 0) {
-      this.doc.setFontSize(10);
-      this.doc.setFont('helvetica', 'normal');
-      
-      analysisData.recommendations.forEach((recommendation, index) => {
-        if (yPosition > this.pageHeight - 30) {
-          this.doc.addPage();
-          yPosition = this.margin;
-        }
-        
-        // Ajouter un point pour chaque recommandation
-        this.doc.text(`${index + 1}. ${recommendation}`, this.margin + 5, yPosition);
-        yPosition += 6;
-      });
-    } else {
-      // Recommandations par défaut selon les résultats
-      const defaultRecommendations = this.getDefaultRecommendations(analysisData);
-      
-      this.doc.setFontSize(10);
-      this.doc.setFont('helvetica', 'normal');
-      
-      defaultRecommendations.forEach((recommendation, index) => {
-        if (yPosition > this.pageHeight - 30) {
-          this.doc.addPage();
-          yPosition = this.margin;
-        }
-        
-        this.doc.text(`${index + 1}. ${recommendation}`, this.margin + 5, yPosition);
-        yPosition += 6;
-      });
-    }
-    
-    return yPosition;
-  }
-
   addFooter() {
     const footerY = this.pageHeight - 25;
     const lineHeight = 5;
@@ -401,26 +387,6 @@ export class PDFReportService {
     });
   }
 
-  getDefaultRecommendations(analysisData) {
-    const recommendations = [
-      'Les résultats de cette analyse IA doivent être interprétés par un radiologue qualifié.',
-      'Une corrélation clinique avec les symptômes du patient est essentielle.',
-      'En cas de doute, des examens complémentaires peuvent être nécessaires.'
-    ];
-    
-    if (analysisData.predictions && analysisData.predictions.length > 0) {
-      const highRiskPathologies = analysisData.predictions.filter(p => 
-        p.probability > 0.5 && p.pathology !== 'Normal'
-      );
-      
-      if (highRiskPathologies.length > 0) {
-        recommendations.unshift('Pathologies à haut risque détectées - Évaluation clinique urgente recommandée.');
-      }
-    }
-    
-    return recommendations;
-  }
-
   getConfidenceColor(probability) {
     if (probability >= 0.8) return { r: 0, g: 255, b: 200 }; // Vert cyan
     if (probability >= 0.6) return { r: 255, g: 211, b: 0 }; // Jaune
@@ -443,9 +409,16 @@ export class PDFReportService {
     }
   }
 
-  async exportToPDF(analysisData, imageData, filename = null) {
+  async exportToPDF(analysisData, imageData, filename = null, options = {}) {
     try {
-      const pdf = await this.generateAnalysisReport(analysisData, imageData);
+      const payload = buildPdfAnalysisPayload(analysisData) ?? analysisData;
+      const clinicalState =
+        options.clinicalState ?? getClinicalDisplayState(payload);
+      const pdf = await this.generateAnalysisReport(
+        payload,
+        imageData,
+        clinicalState
+      );
       const defaultFilename = `RadioX_Rapport_${new Date().toISOString().split('T')[0]}.pdf`;
       const finalFilename = filename || defaultFilename;
       
