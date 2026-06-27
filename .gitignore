@@ -1,54 +1,31 @@
-# Python
-__pycache__/
-*.py[cod]
+venv
+__pycache__
+*.pyc
 *.pyo
 *.pyd
-.Python
-venv/
-env/
-.venv/
-*.egg-info/
-dist/
-build/
 
-# Modèles IA (trop lourds pour GitHub)
-ml_service/models/*.pt
-ml_service/models/*.pth
-ml_service/models/*.bin
+.git
+.gitignore
 
-# Base de données
+models
+*.pt
+*.pth
+
+*.png
+*.jpg
+*.jpeg
+
+# Node
+frontend/node_modules/
+
+# Database
 *.db
-*.sqlite
-*.sqlite3
-
-# Variables d'environnement
-.env
-.env.local
-.env.production
-backend/.env
-
-# Node.js
-node_modules/
-frontend/dist/
-frontend/.vite/
 
 # Logs
 *.log
-logs/
+build_log.txt
 
-# OS
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# IDE
-.vscode/
-.idea/
-*.swp
-
-# Dataset (trop lourd)
-datasets/
-*.csv.gz
-
-# Cache torchxrayvision
-.torchxrayvision/
+radiox_evaluate*
+plot_training*
+convert_model*
+download_nih_model*

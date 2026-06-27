@@ -2,23 +2,24 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+RUN pip install --upgrade pip
+
+# Installation PyTorch CPU uniquement
+RUN pip install \
+    torch==2.3.1 \
+    torchvision==0.18.1 \
+    --index-url https://download.pytorch.org/whl/cpu \
+    --extra-index-url https://pypi.org/simple
+
+# Installation du reste des dépendances
+RUN pip install \
+    --default-timeout=2000 \
+    --no-cache-dir \
+    -r requirements.txt
 
 COPY . .
-RUN mkdir -p models pipelines
-
-# Create __init__.py files
-RUN touch pipelines/__init__.py
 
 EXPOSE 8001
 
